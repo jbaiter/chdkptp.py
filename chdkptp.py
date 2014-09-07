@@ -29,12 +29,12 @@ class LuaContext(object):
         inside of `pcall` and raises proper Exceptions.
     """
     def _raise_exception(self, errval):
-        if isinstance(rval, (basestring, numbers.Number)):
-            raise LuaError(rval)
-        elif rval['etype'] == 'ptp':
-            raise PTPError(rval)
+        if isinstance(errval, (basestring, numbers.Number)):
+            raise LuaError(errval)
+        elif errval['etype'] == 'ptp':
+            raise PTPError(errval)
         else:
-            raise LuaError(dict(rval))
+            raise LuaError(dict(errval))
 
     def eval(self, lua_code):
         checked_code = "pcall(function() return {0} end)".format(lua_code)
@@ -66,7 +66,7 @@ class LuaContext(object):
         self._rt = LuaRuntime()
         if self.eval("type(jit) == 'table'"):
             raise RuntimeError("lupa must be linked against Lua, not LuaJIT.\n"
-                            "Please install lupa with `--no-luajit`.")
+                               "Please install lupa with `--no-luajit`.")
         self._setup_runtime()
 
     def _setup_runtime(self):
@@ -154,7 +154,7 @@ class ChdkDevice(object):
         :param device_info:   Information about device to connect to
         :type device_info:    :class:`DeviceInfo`
         """
-        self._lua = _get_lua_runtime()
+        self._lua = LuaContext()
         raise NotImplementedError
 
     def get_messages(self):
