@@ -1,0 +1,6 @@
+[submodule "vendor/chdkptp"]
+	path = vendor/chdkptp
+	url = https://github.com/svn2github/chdkptp.git
+[submodule "vendor/squish"]
+	path = vendor/squish
+	url = https://github.com/LuaDist/squish
