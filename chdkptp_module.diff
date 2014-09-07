@@ -1,0 +1,86 @@
+diff --git a/Makefile b/Makefile
+index cc446d3..5244703 100644
+--- a/Makefile
++++ b/Makefile
+@@ -113,14 +113,19 @@ LDFLAGS+=$(LIB_PATHS) $(patsubst %,-l%,$(LINK_LIBS) $(SYS_LIBS))
+ SUBDIRS=lfs
+ 
+ CHDKPTP_EXE=chdkptp$(EXE_EXTRA)$(EXE)
++CHDKPTP_LIB=chdkptp$(EXE_EXTRA)$(LIB)
+ 
+ EXES=$(CHDKPTP_EXE)
++LIBS=$(CHDKPTP_LIB)
+ 
+-all: $(EXES)
++all: $(EXES) $(LIBS)
+ 
+ SRCS=properties.c ptp.c chdkptp.c lbuf.c liveimg.c rawimg.c luautil.c $(PTPIP_SRCS)
+ OBJS=$(SRCS:.c=.o)
+ 
++$(CHDKPTP_LIB): $(OBJS)
++	$(CC) -shared -o $@ lfs/lfs.o $^ $(LDFLAGS)
++
+ $(CHDKPTP_EXE): $(OBJS)
+ 	$(CC) -o $@ lfs/lfs.o $^ $(LDFLAGS)
+ 
+diff --git a/chdkptp.c b/chdkptp.c
+index 954d27c..36a259b 100644
+--- a/chdkptp.c
++++ b/chdkptp.c
+@@ -2160,7 +2160,11 @@ static const luaL_Reg lua_errlib[] = {
+ };
+ 
+ 
+-static int chdkptp_registerlibs(lua_State *L) {
++int luaopen_chdkptp(lua_State *L) {
++	usb_init();
++	luaopen_lfs(L);
++	luaopen_lbuf(L);
++	luaopen_rawimg(L);
+ 	/* set up meta table for error object */
+ 	luaL_newmetatable(L,CHDK_API_ERROR_META);
+ 	lua_pushcfunction(L,api_error_tostring);
+@@ -2229,13 +2233,9 @@ int main(int argc, char ** argv)
+ 	g_argv = argv;
+ 	/* register signal handlers */
+ //	signal(SIGINT, ptpcam_siginthandler);
+-	usb_init();
+ 	lua_State *L = luaL_newstate();
+ 	luaL_openlibs(L);
+-	luaopen_lfs(L);
+-	luaopen_lbuf(L);
+-	luaopen_rawimg(L);	
+-	chdkptp_registerlibs(L);
++	luaopen_chdkptp(L);
+ 	exec_lua_string(L,"require('main')");
+ 	uninit_gui_libs(L);
+ 	lua_close(L);
+diff --git a/include.mk b/include.mk
+index 954f855..7080d8a 100644
+--- a/include.mk
++++ b/include.mk
+@@ -7,6 +7,7 @@ HOSTPLATFORM:=$(patsubst MINGW%,MINGW,$(shell uname -s))
+ ifeq ($(HOSTPLATFORM),MINGW)
+ OSTYPE=Windows
+ EXE=.exe
++LIB=.dll
+ # Note may be freetype or freetype6 depending on your CD version, zlib requried for 5.5 and later
+ CD_FREETYPE_LIB=freetype6 z
+ #CD_FREETYPE_LIB=freetype z
+@@ -14,6 +15,7 @@ else
+ ifeq ($(HOSTPLATFORM),Linux)
+ OSTYPE=Linux
+ EXE= 
++LIB=.so
+ CD_FREETYPE_LIB=freetype z
+ endif
+ endif
+@@ -22,7 +24,7 @@ endif
+ EXE_EXTRA=
+ 
+ CC=gcc
+-CFLAGS=-DCHDKPTP_OSTYPE=\"$(OSTYPE)\" -Wall
++CFLAGS=-DCHDKPTP_OSTYPE=\"$(OSTYPE)\" -Wall -fPIC -g
+ LDFLAGS=
+ #LD=ld
+ 
