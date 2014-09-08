@@ -1,0 +1,2 @@
+include chdkptp_module.diff
+graft vendor
