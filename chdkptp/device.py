@@ -29,24 +29,24 @@ def list_devices():
     :rtype:   List of `DeviceInfo` named tuples
     """
     devices = global_lua.execute("""
-    local info = {}
-    local devs = chdk.list_usb_devices()
-    for i, desc in ipairs(devs) do
-        local lcon = chdku.connection(desc)
-        lcon:connect()
-        table.insert(info, {
-            model_name = lcon.ptpdev.model,
-            bus_num = lcon.condev.bus,
-            device_num = lcon.condev.dev,
-            vendor_id = lcon.condev.vendor_id,
-            product_id = lcon.condev.product_id,
-            serial_num = lcon.ptpdev.serial_number,
-            chdk_api = lcon.apiver,
-        })
-        lcon:disconnect()
-    end
-    return info;
-    """)
+        local info = {}
+        local devs = chdk.list_usb_devices()
+        for i, desc in ipairs(devs) do
+            local lcon = chdku.connection(desc)
+            lcon:connect()
+            table.insert(info, {
+                model_name = lcon.ptpdev.model,
+                bus_num = lcon.condev.bus,
+                device_num = lcon.condev.dev,
+                vendor_id = lcon.condev.vendor_id,
+                product_id = lcon.condev.product_id,
+                serial_num = lcon.ptpdev.serial_number,
+                chdk_api = lcon.apiver,
+            })
+            lcon:disconnect()
+        end
+        return info;
+        """)
     infos = []
     for dev_info in devices.values():
         dev_info = dict(dev_info)
@@ -89,17 +89,17 @@ class ChdkDevice(object):
             return
         mode_num = int(mode == 'record')
         status, error = self.lua_execute("""
-        switch_mode_usb(%d)
-        local i = 0
-        while (get_mode() and 1 or 0) ~= %d and i < 300 do
-            sleep(10)
-            i = i + 1
-        end
-        if (get_mode() and 1 or 0) ~= %d then
-            return false, 'switch failed'
-        end
-        return true, ""
-        """ % (mode_num, mode_num, mode_num))
+            switch_mode_usb(%d)
+            local i = 0
+            while (get_mode() and 1 or 0) ~= %d and i < 300 do
+                sleep(10)
+                i = i + 1
+            end
+            if (get_mode() and 1 or 0) ~= %d then
+                return false, 'switch failed'
+            end
+            return true, ""
+            """ % (mode_num, mode_num, mode_num))
         if not status:
             raise PTPError('Could not switch mode')
 
@@ -279,6 +279,147 @@ class ChdkDevice(object):
         # lvdump, lvdumpimg
         raise NotImplementedError
 
+    def shoot(self, **kwargs):
+        """ Shoot a picture
+
+        For all arguments where `None` is a legal type, it signifies that the
+        current value from the camera should be used and not be overriden.
+
+        :param shutter_speed:   Shutter speed in APEX96 (default: None)
+        :type shutter_speed:    int/float/None
+        :param real_iso:        Canon 'real' ISO (default: None)
+        :type real_iso:         int/float/None
+        :param market_iso:      Canon 'market' ISO (default: None)
+        :type market_iso:       int/float/None
+        :param aperture:        Aperture value in APEX96 (default: None)
+        :type aperture:         int/float/None
+        :param isomode:         Must conform to ISO value in Canon UI, shooting
+                                mode must have manual ISO (default: None)
+        :type isomode:          int/None
+        :param nd_filter:       Toggle Neutral Density filter (default: None)
+        :type nd_filter:        boolean/None
+        :param distance:        Subject distance. If specified as an integer,
+                                the value is interpreted as the distance in
+                                milimeters. You can also pass a string that
+                                contains a number followed by one of the
+                                following units: 'mm', 'cm', 'm', 'ft' or 'in'
+                                (default: None)
+        :type distance:         str/unicode/int
+        :param dng:             Dump raw framebuffer in DNG format
+                                (default: False)
+        :type dng:              boolean
+        :param wait:            Wait for capture to complete (default: True)
+        :type wait;             boolean
+        :param download_after:  Download and return image data after capture
+                                (default: False)
+        :type download_after:   boolean
+        :param remove_after:    Remove image data after shooting
+                                (default: False)
+        :type remove_after:     boolean
+        :param stream:          Stream and return image data directly from
+                                device (will not be saved on camera storage)
+                                (default: True)
+        :type stream:           boolean
+        """
+        self._validate_shoot_args()
+        options = self._lua.globals.util.serialize(
+            self._lua.table(**self._parse_shoot_args(**kwargs)))
+
+        if not kwargs.get('stream', True):
+            return self._shoot_nonstreaming(
+                options, wait=kwargs.get('wait', True),
+                download=kwargs.get('download_after', False),
+                remove=kwargs.get('remove_after', False))
+        else:
+            return self._shoot_streaming(options, dng=kwargs.get('dng', False))
+
+    def _shoot_nonstreaming(self, options, wait=True, download=False,
+                            remove=False):
+        if not wait:
+            self.lua_execute("rlib_shoot(%s)" % options, wait=False,
+                             remote_libs=['rlib_shoot'])
+            return
+        status = self.lua_execute(
+            "return rlib_shoot(%s)" % options,
+            remote_libs=['serialize_msgs', 'rlib_shoot'])
+        # TODO: Check for errors
+        img_path = "{0}/IMG_{1:04}.JPG".format(status['dir'], status['exp'])
+        rval = None
+        if download:
+            tmp_path = tempfile.mkstemp()[1]
+            self._con.download(self._con, img_path, tmp_path)
+            with open(tmp_path, 'rb') as fp:
+                rval = fp.read()
+            os.unlink(tmp_path)
+        if remove:
+            self.delete_files((img_path,))
+        return rval
+
+    def _shoot_streaming(self, options, dng=False):
+        self.lua_execute(
+            "return rs_init(%s)" % options, remote_libs=['rs_shoot_init'])
+        # TODO: Check for errors
+        self.lua_execute("rs_shoot(%s)" % options,
+                         remote_libs=['rs_shoot'], wait=False)
+        rcopts = {}
+        img_data = self._lua.table()
+        if dng:
+            dng_info = self._lua.table(lstart=0, lcount=0, badpix=0)
+            rcopts['dng_hdr'] = self._lua.globals.chdku.rc_handler_store(
+                self._lua.eval("""
+                function(dng_info)
+                    return function(chunk)
+                        dng_info.hdr=chunk.data
+                    end
+                end
+                """)(dng_info))
+            rcopts['raw'] = self._lua.eval("""
+                function(dng_info, img_data)
+                    return function(lcon, hdata)
+                        cli.dbgmsg('rc chunk get %d\\n', hdata.id)
+                        local status, raw = lcon:capture_get_chunk_pcall(
+                            hdata.id)
+                        if not status then
+                            return false, raw
+                        end
+                        cli.dbgmsg('rc chunk size:%d offset:%s last:%s\\n',
+                                    raw.size, tostring(raw.offset),
+                                    tostring(raw.last))
+                        table.insert(img_data, {data=dng_info.hdr})
+                        local status, err = chdku.rc_process_dng(dng_info,
+                                                                raw)
+                        if status then
+                            table.insert(img_data, {data=dng_info.thumb})
+                            table.insert(img_data, raw)
+                        end
+                        return status, err
+                    end
+                end
+                """)(dng_info, img_data)
+        else:
+            rcopts['jpg'] = self._lua.globals.chdku.rc_handler_store(
+                img_data)
+        self._con.capture_get_data_pcall(
+            self._con, self._lua.table(**rcopts))
+        self._con.wait_status_pcall(
+            self._con, self._lua.table(run=False, timeout=30000))
+        # TODO: Check for error
+        # TODO: Check for timeout
+        self.lua_execute('init_usb_capture(0)')
+        # NOTE: We can't touch the chunk data from Python or else the
+        # Lua runtime segfaults, so we let Lua take care of assembling
+        # the output data
+        return self._lua.eval("""
+            function(chunks)
+                local out_data = ''
+                for i, c in ipairs(chunks) do
+                    out_data = out_data .. c.data:string()
+                end
+                return out_data
+            end
+            """)(img_data)
+        return img_data
+
     def _validate_shoot_args(self, **kwargs):
         for arg in ('shutter_speed', 'real_iso', 'market_iso', 'aperture',
                     'isomode'):
@@ -349,141 +490,3 @@ class ChdkDevice(object):
         else:
             options['info'] = True
         return options
-
-    def shoot(self, **kwargs):
-        """ Shoot a picture
-
-        For all arguments where `None` is a legal type, it signifies that the
-        current value from the camera should be used and not be overriden.
-
-        :param shutter_speed:   Shutter speed in APEX96 (default: None)
-        :type shutter_speed:    int/float/None
-        :param real_iso:        Canon 'real' ISO (default: None)
-        :type real_iso:         int/float/None
-        :param market_iso:      Canon 'market' ISO (default: None)
-        :type market_iso:       int/float/None
-        :param aperture:        Aperture value in APEX96 (default: None)
-        :type aperture:         int/float/None
-        :param isomode:         Must conform to ISO value in Canon UI, shooting
-                                mode must have manual ISO (default: None)
-        :type isomode:          int/None
-        :param nd_filter:       Toggle Neutral Density filter (default: None)
-        :type nd_filter:        boolean/None
-        :param distance:        Subject distance. If specified as an integer,
-                                the value is interpreted as the distance in
-                                milimeters. You can also pass a string that
-                                contains a number followed by one of the
-                                following units: 'mm', 'cm', 'm', 'ft' or 'in'
-                                (default: None)
-        :type distance:         str/unicode/int
-        :param raw:             Dump raw framebuffer (default: False)
-        :type raw:              boolean
-        :param dng:             Dump raw framebuffer in DNG format
-                                (default: False)
-        :type dng:              boolean
-        :param wait:            Wait for capture to complete (default: True)
-        :type wait;             boolean
-        :param download_after:  Download and return image data after capture
-                                (default: False)
-        :type download_after:   boolean
-        :param remove_after:    Remove image data after shooting
-                                (default: False)
-        :type remove_after:     boolean
-        :param stream:          Stream and return image data directly from
-                                device (will not be saved on camera storage)
-                                (default: True)
-        :type stream:           boolean
-        """
-        self._validate_shoot_args()
-        options = self._lua.globals.util.serialize(
-            self._lua.table(**self._parse_shoot_args(**kwargs)))
-
-        if not kwargs.get('wait', True):
-            self.lua_execute("rlib_shoot(%s)" % options, wait=False,
-                             remote_libs=['rlib_shoot'])
-            return
-        if not kwargs.get('stream', True):
-            status = self.lua_execute(
-                "return rlib_shoot(%s)" % options,
-                remote_libs=['serialize_msgs', 'rlib_shoot'])
-            # TODO: Check for errors
-            if not (kwargs.get('download_after', False) or
-                    kwargs.get('remove_after', False)):
-                return
-
-            img_path = "{0}/IMG_{1:04}.JPG".format(status['dir'],
-                                                   status['exp'])
-            rval = None
-            if kwargs.get('download_after', False):
-                tmp_path = tempfile.mkstemp()[1]
-                self._con.download(self._con, img_path, tmp_path)
-                with open(tmp_path, 'rb') as fp:
-                    rval = fp.read()
-                os.unlink(tmp_path)
-            if kwargs.get('remove_after', False):
-                self.delete_files((img_path,))
-            return rval
-        else:
-            self.lua_execute(
-                "return rs_init(%s)" % options, remote_libs=['rs_shoot_init'])
-            # TODO: Check for errors
-            self.lua_execute("rs_shoot(%s)" % options,
-                             remote_libs=['rs_shoot'], wait=False)
-            rcopts = {}
-            img_data = self._lua.table()
-            if kwargs.get('dng', False) and not kwargs.get('raw', False):
-                dng_info = self._lua.table(lstart=0, lcount=0, badpix=0)
-                rcopts['dng_hdr'] = self._lua.globals.chdku.rc_handler_store(
-                    self._lua.eval("""
-                    function(dng_info)
-                        return function(chunk)
-                            dng_info.hdr=chunk.data
-                        end
-                    end
-                    """)(dng_info))
-                rcopts['raw'] = self._lua.eval("""
-                    function(dng_info, img_data)
-                        return function(lcon, hdata)
-                            cli.dbgmsg('rc chunk get %d\\n', hdata.id)
-                            local status, raw = lcon:capture_get_chunk_pcall(
-                                hdata.id)
-                            if not status then
-                                return false, raw
-                            end
-                            cli.dbgmsg('rc chunk size:%d offset:%s last:%s\\n',
-                                       raw.size, tostring(raw.offset),
-                                       tostring(raw.last))
-                            table.insert(img_data, {data=dng_info.hdr})
-                            local status, err = chdku.rc_process_dng(dng_info,
-                                                                    raw)
-                            if status then
-                                table.insert(img_data, {data=dng_info.thumb})
-                                table.insert(img_data, raw)
-                            end
-                            return status, err
-                        end
-                    end
-                    """)(dng_info, img_data)
-            else:
-                rcopts['jpg'] = self._lua.globals.chdku.rc_handler_store(
-                    img_data)
-            self._con.capture_get_data_pcall(
-                self._con, self._lua.table(**rcopts))
-            self._con.wait_status_pcall(
-                self._con, self._lua.table(run=False, timeout=30000))
-            # TODO: Check for error
-            # TODO: Check for timeout
-            self.lua_execute('init_usb_capture(0)')
-            # NOTE: We can't touch the chunk data from Python or else the
-            # Lua runtime segfaults, so we let Lua take care of assembling
-            # the output data
-            return self._lua.eval("""
-                function(chunks)
-                    local out_data = ''
-                    for i, c in ipairs(chunks) do
-                        out_data = out_data .. c.data:string()
-                    end
-                    return out_data
-                end
-                """)(img_data)
-            return img_data
