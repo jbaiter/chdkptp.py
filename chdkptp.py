@@ -1,12 +1,22 @@
 import logging
 import numbers
 import os
-from collections import namedtuple
+import re
+from numbers import Number
+from collections import namedtuple, Iterable
 
 from lupa import LuaRuntime, LuaError
 
 CHDKPTP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             'vendor', 'chdkptp')
+DISTANCE_RE = re.compile('(\d+(?:.\d+)?)(mm|cm|m|ft|in)')
+DISTANCE_FACTORS = {
+    'mm': 1,
+    'cm': 100,
+    'm': 1000,
+    'ft': 304.8,
+    'in': 25.4
+}
 
 logger = logging.getLogger('pychdkptp.chdkptp')
 
@@ -43,17 +53,26 @@ class LuaContext(object):
         return self._rt.execute(lua_code)
 
     def peval(self, lua_code):
-        checked_code = "pcall(function() return {0} end)".format(lua_code)
-        status, rval = self._rt.eval(checked_code)
+        returns = 'returns' in lua_code
+        checked_code = ("pcall(function() {0} {1} end)"
+                        .format('return' if not returns else '', lua_code))
+        rval = self._rt.eval(checked_code)
+        if isinstance(rval, Iterable):
+            status, rval = rval
+        else:
+            status = rval
         if not status:
             self._raise_exception(rval)
         return rval
 
     def pexecute(self, lua_code):
-        returns = lua_code.startswith("return")
-        checked_code = ("{0}pcall(function() return {1} end)"
-                        .format("return " if returns else "", lua_code))
-        status, rval = self._rt.execute(checked_code)
+        checked_code = ("return pcall(function() {0} end)"
+                        .format(lua_code))
+        rval = self._rt.execute(checked_code)
+        if isinstance(rval, Iterable):
+            status, rval = rval
+        else:
+            status = rval
         if not status:
             self._raise_exception(rval)
         return rval
@@ -69,7 +88,7 @@ class LuaContext(object):
         return self._rt.globals()
 
     def __init__(self):
-        self._rt = LuaRuntime(unpack_returned_tuples=True)
+        self._rt = LuaRuntime(unpack_returned_tuples=True, encoding=None)
         if self.eval("type(jit) == 'table'"):
             raise RuntimeError("lupa must be linked against Lua, not LuaJIT.\n"
                                "Please install lupa with `--no-luajit`.")
@@ -120,6 +139,7 @@ class LuaContext(object):
         self._rt.execute("""
             con = chdku.connection()
         """)
+global_lua = LuaContext()
 
 
 def list_devices():
@@ -128,8 +148,7 @@ def list_devices():
     :return:  All connected PTP devices
     :rtype:   List of `DeviceInfo` named tuples
     """
-    lua = LuaContext()
-    devices = lua.execute("""
+    devices = global_lua.execute("""
     local info = {}
     local devs = chdk.list_usb_devices()
     for i, desc in ipairs(devs) do
@@ -157,6 +176,23 @@ def list_devices():
     return infos
 
 
+def iso_to_av96(iso):
+    return global_lua.globals.exposure.iso_to_av96(iso)
+
+
+def shutter_to_tv96(shutter_speed):
+    return global_lua.globals.exposure.shutter_to_tv96(shutter_speed)
+
+
+def aperture_to_av96(aperture):
+    return global_lua.globals.exposure.f_to_av96(aperture)
+
+
+def apex_to_apex96(apex):
+    x = apex*96
+    return round(x) if x > 0 else -round(x)
+
+
 class ChdkDevice(object):
     def __init__(self, device_info):
         """ Create a new device instance and connect to the CHDK device.
@@ -177,6 +213,32 @@ class ChdkDevice(object):
     def is_connected(self):
         return self._lua.eval("con:is_connected()")
 
+    @property
+    def mode(self):
+        is_record, is_video, _ = self.lua_execute('return get_mode()')
+        return 'record' if is_record else 'play'
+
+    def switch_mode(self, mode):
+        if mode not in ('play', 'record'):
+            raise ValueError("`mode` must be one of 'play' or 'record'")
+        if self.mode == mode:
+            return
+        mode_num = int(mode == 'record')
+        status, error = self.lua_execute("""
+        switch_mode_usb(%d)
+        local i = 0
+        while (get_mode() and 1 or 0) ~= %d and i < 300 do
+            sleep(10)
+            i = i + 1
+        end
+        if (get_mode() and 1 or 0) ~= %d then
+            return false, 'switch failed'
+        end
+        return true, ""
+        """ % (mode_num, mode_num, mode_num))
+        if not status:
+            raise PTPError('Could not switch mode')
+
     def get_messages(self):
         """ Get all messages from device buffer
 
@@ -195,7 +257,7 @@ class ChdkDevice(object):
         # putm
         raise NotImplementedError
 
-    def lua_execute(self, lua_code, wait=True, do_return=True):
+    def lua_execute(self, lua_code, wait=True, do_return=True, remote_libs=[]):
         """ Execute Lua code on the device.
 
         :param lua_code:    Lua code to execute
@@ -205,18 +267,20 @@ class ChdkDevice(object):
         :do_return:         Return value of lua code, only if `wait=True`
         :rtype:             bool/int/unicode/dict/tuple
         """
+        remote_libs = "{%s}" % ", ".join("'%s'" % lib for lib in remote_libs)
         if not wait:
-            self._lua.execute("con:exec('{0}'").format(lua_code)
+            self._lua.pexecute("con:exec([[%s]], {libs=%s})"
+                               % (lua_code, remote_libs))
             return None
         # NOTE: Because of the frequency of curly braces, we prefer old-style
         # string formatting in this case, since this saves us quite a bit of
         # escaping
-        lua_rvals, msgs = self._lua.execute("""
+        lua_rvals, msgs = self._lua.pexecute("""
         local rvals = {}
         local msgs = {}
-        con:execwait('%s', {rets=rvals, msgs=msgs})
+        con:execwait([[%s]], {rets=rvals, msgs=msgs, libs=%s})
         return {rvals, msgs}
-        """ % lua_code).values()
+        """ % (lua_code, remote_libs)).values()
         if not do_return:
             return None
         return_values = []
@@ -232,8 +296,10 @@ class ChdkDevice(object):
             if all(x.isdigit() for x in parsed_val):
                 parsed_val = tuple(parsed_val.values())
             return_values.append(parsed_val)
-        return (tuple(return_values)
-                if len(return_values) > 1 else return_values[0])
+        if len(return_values) == 1:
+            return return_values[0]
+        else:
+            return tuple(return_values)
 
     def kill_scripts(self, flush=True):
         """ Terminate any running script on the device.
@@ -256,6 +322,24 @@ class ChdkDevice(object):
                                 uploading.
         """
         # upload, mupload
+        raise NotImplementedError
+
+    def download_file(self, remote_path, local_path=None):
+        """ Download a single file from the device.
+
+        If no local path is specified, the file's content is returned as a
+        bytestring.
+
+        :param remote_path: Path on the device. The leading 'A/' is optional,
+                            it will be automatically prepended if not
+                            specified
+        :type remote_path:  str/unicode
+        :param local_path:  (Optional) local path to store file under.
+        :type local_path:   str/unicode
+        :return:            If `local_path` was not specified, the file content
+                            as a bytestring, otherwise None
+        :rtype:             str/None
+        """
         raise NotImplementedError
 
     def download_files(self, remote_paths, local_path='./', skip_checks=False):
@@ -331,13 +415,170 @@ class ChdkDevice(object):
         # lvdump, lvdumpimg
         raise NotImplementedError
 
-    def shoot(self, shutter_speed=None, real_iso=None, market_iso=None,
-              aperture=None, isomode=None, nd_filter=None, distance=None,
-              raw=None, dng=None, download_after=False, remove_after=False,
-              stream=False):
-        # shoot, remoteshoot
-        raise NotImplementedError
+    def _validate_shoot_args(self, **kwargs):
+        for arg in ('shutter_speed', 'real_iso', 'market_iso', 'aperture',
+                    'isomode'):
+            if kwargs.get(arg, None) is not None and not isinstance(
+                    kwargs.get(arg, None), Number):
+                raise ValueError("`{0}` must be an number".format(arg))
+        if sum(1 for x in ('real_iso', 'market_iso', 'isomode')
+               if kwargs.get(x, None) is not None) > 1:
+            raise ValueError("Only one of `real_iso`, `market_iso` or "
+                             "`isomode` can be set.")
+        if kwargs.get('nd_filter', None) not in (True, False, None):
+            raise ValueError("`nd_filter` must be one of True (swung in), "
+                             "False (swung out) or None (camera default)")
+        bad_distance = (
+            'distance' in kwargs
+            and not (isinstance(kwargs.get('distance', None), Number)
+                     or DISTANCE_RE.match(kwargs.get('distance', None))))
+        if bad_distance:
+            raise ValueError("`distance` must be an integer (= value in "
+                             "milimeter) or a string with a suffix that is "
+                             "either `m`, `cm`, `mm`, `ft` or `in`.")
+        action_after = any(kwargs.get(x, False) for x in
+                           ('stream', 'download_after', 'remove_after'))
+        if not kwargs.get('wait', True) and action_after:
+            raise ValueError("Cannot stream, remove/download after when "
+                             "`wait` is `False`")
 
-    def switch_mode(self, mode):
-        # rec, play
-        raise NotImplementedError
+    def _parse_shoot_args(self, **kwargs):
+        options = {}
+        if kwargs.get('aperture', None) is not None:
+            options['av'] = kwargs.get('aperture', None)
+        if kwargs.get('real_iso', None) is not None:
+            options['sv'] = kwargs.get('real_iso', None)
+        if kwargs.get('market_iso', None) is not None:
+            options['svm'] = kwargs.get('market_iso', None)
+        if kwargs.get('isomode', None) is not None:
+            options['isomode'] = int(kwargs.get('isomode', None))
+        if kwargs.get('shutter_speed', None) is not None:
+            options['tv'] = kwargs.get('shutter_speed', None)
+        if kwargs.get('nd_filter', None):
+            options['nd'] = 1 if kwargs.get('nd_filter', None) else 2
+        if kwargs.get('distance', None) is not None:
+            if not isinstance(kwargs.get('distance', None), Number):
+                value, unit = DISTANCE_RE.match(
+                    kwargs.get('distance', None)).groups()
+                options['sd'] = round(DISTANCE_FACTORS[unit]*float(value))
+            else:
+                options['sd'] = round(kwargs.get('distance', None))
+        if kwargs.get('dng', False):
+            options['dng'] = 1
+        if kwargs.get('dng', False) or kwargs.get('raw', False):
+            options['raw'] = 1
+        if kwargs.get('stream', True):
+            if kwargs.get('dng', False):
+                options['fformat'] = 6
+            elif kwargs.get('raw', False):
+                options['fformat'] = 4
+            else:
+                options['fformat'] = 1
+        return options
+
+    def shoot(self, **kwargs):
+        """ Shoot a picture
+
+        For all arguments where `None` is a legal type, it signifies that the
+        current value from the camera should be used and not be overriden.
+
+        :param shutter_speed:   Shutter speed in APEX96 (default: None)
+        :type shutter_speed:    int/float/None
+        :param real_iso:        Canon 'real' ISO (default: None)
+        :type real_iso:         int/float/None
+        :param market_iso:      Canon 'market' ISO (default: None)
+        :type market_iso:       int/float/None
+        :param aperture:        Aperture value in APEX96 (default: None)
+        :type aperture:         int/float/None
+        :param isomode:         Must conform to ISO value in Canon UI, shooting
+                                mode must have manual ISO (default: None)
+        :type isomode:          int/None
+        :param nd_filter:       Toggle Neutral Density filter (default: None)
+        :type nd_filter:        boolean/None
+        :param distance:        Subject distance. If specified as an integer,
+                                the value is interpreted as the distance in
+                                milimeters. You can also pass a string that
+                                contains a number followed by one of the
+                                following units: 'mm', 'cm', 'm', 'ft' or 'in'
+                                (default: None)
+        :type distance:         str/unicode/int
+        :param raw:             Dump raw framebuffer (default: False)
+        :type raw:              boolean
+        :param dng:             Dump raw framebuffer in DNG format
+                                (default: False)
+        :type dng:              boolean
+        :param wait:            Wait for capture to complete (default: True)
+        :type wait;             boolean
+        :param download_after:  Download and return image data after capture
+                                (default: False)
+        :type download_after:   boolean
+        :param remove_after:    Remove image data after shooting
+                                (default: False)
+        :type remove_after:     boolean
+        :param stream:          Stream and return image data directly from
+                                device (will not be saved on camera storage)
+                                (default: True)
+        :type stream:           boolean
+        """
+        self._validate_shoot_args()
+        options = self._lua.globals.util.serialize(
+            self._lua.table(**self._parse_shoot_args(**kwargs)))
+
+        if not kwargs.get('wait', True):
+            self.lua_execute("rlib_shoot(%s)" % options, wait=False,
+                             remote_libs=['rlib_shoot'])
+            return
+        if not kwargs.get('stream', True):
+            status, errors = self.lua_execute(
+                "return rlib_shoot(%s)" % options,
+                remote_libs=['serialize_msgs', 'rlib_shoot'])
+            # TODO: Check for errors
+            if not (kwargs.get('download_after', False) or
+                    kwargs.get('remove_after', False)):
+                return
+
+            # TODO: Construct path on device for captured image
+            img_path = ''
+            rval = None
+            if kwargs.get('download_after', False):
+                rval = self.download_file(img_path)
+            if kwargs.get('remove_after', False):
+                self.delete_files((img_path,))
+            return rval
+        else:
+            self.lua_execute(
+                "return rs_init(%s)" % options, remote_libs=['rs_shoot_init'])
+            # TODO: Check for errors
+            self.lua_execute("rs_shoot(%s)" % options,
+                             remote_libs=['rs_shoot'], wait=False)
+            # TODO: Build rcopts table with 'jpg', 'dng_hdr, 'raw' handler
+            # callbacks
+            rcopts = {}
+            img_data = self._lua.table()
+            if kwargs.get('dng', False) and not kwargs.get('raw', False):
+                # TODO: Create raw data and DNG header callback
+                raise NotImplementedError
+            else:
+                rcopts['jpg'] = self._lua.globals.chdku.rc_handler_store(
+                    img_data)
+            self._lua.globals.con.capture_get_data_pcall(
+                self._lua.globals.con, self._lua.table(**rcopts))
+            self._lua.globals.con.wait_status_pcall(
+                self._lua.globals.con,
+                self._lua.table(run=False, timeout=30000))
+            # TODO: Check for error
+            # TODO: Check for timeout
+            self.lua_execute('init_usb_capture(0)')
+            # NOTE: We can't touch the chunk data from Python or else the
+            # Lua runtime segfaults, so we let Lua take care of assembling
+            # the output data
+            return self._lua.eval("""
+                function(chunks)
+                    local out_data = ''
+                    for i, c in ipairs(chunks) do
+                        out_data = out_data .. c.data:string()
+                    end
+                    return out_data
+                end
+                """)(img_data)
+            return img_data
