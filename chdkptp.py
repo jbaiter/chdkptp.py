@@ -551,13 +551,41 @@ class ChdkDevice(object):
             # TODO: Check for errors
             self.lua_execute("rs_shoot(%s)" % options,
                              remote_libs=['rs_shoot'], wait=False)
-            # TODO: Build rcopts table with 'jpg', 'dng_hdr, 'raw' handler
-            # callbacks
             rcopts = {}
             img_data = self._lua.table()
             if kwargs.get('dng', False) and not kwargs.get('raw', False):
-                # TODO: Create raw data and DNG header callback
-                raise NotImplementedError
+                dng_info = self._lua.table(lstart=0, lcount=0, badpix=0)
+                rcopts['dng_hdr'] = self._lua.globals.chdku.rc_handler_store(
+                    self._lua.eval("""
+                    function(dng_info)
+                        return function(chunk)
+                            dng_info.hdr=chunk.data
+                        end
+                    end
+                    """)(dng_info))
+                rcopts['raw'] = self._lua.eval("""
+                    function(dng_info, img_data)
+                        return function(lcon, hdata)
+                            cli.dbgmsg('rc chunk get %d\\n', hdata.id)
+                            local status, raw = lcon:capture_get_chunk_pcall(
+                                hdata.id)
+                            if not status then
+                                return false, raw
+                            end
+                            cli.dbgmsg('rc chunk size:%d offset:%s last:%s\\n',
+                                       raw.size, tostring(raw.offset),
+                                       tostring(raw.last))
+                            table.insert(img_data, {data=dng_info.hdr})
+                            local status, err = chdku.rc_process_dng(dng_info,
+                                                                    raw)
+                            if status then
+                                table.insert(img_data, {data=dng_info.thumb})
+                                table.insert(img_data, raw)
+                            end
+                            return status, err
+                        end
+                    end
+                    """)(dng_info, img_data)
             else:
                 rcopts['jpg'] = self._lua.globals.chdku.rc_handler_store(
                     img_data)
