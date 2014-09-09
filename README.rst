@@ -8,11 +8,12 @@ via an embedded, thread-safe Lua runtime (thanks to Stefan Behnel's
 
 Requirements
 ============
-    - C compiler
-    - Lua 5.2, with headers
-    - libusb, with headers
-    - lupa, installed with the ``--no-luajit`` flag
+
+- C compiler
+- Lua 5.2, with headers
+- libusb, with headers
+- lupa, installed with the ``--no-luajit`` flag
 
 Documentation
 =============
-Please refer to the `API documentation on readthedocs.org <http://chdkptp-py.readthedocs.org/en/latest/#api-reference>`_
+Please refer to the `API documentation on readthedocs.org <http://chdkptppy.readthedocs.org/en/latest/#api-reference>`_
