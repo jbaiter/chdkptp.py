@@ -1,15 +1,12 @@
-import logging
-import numbers
 import os
 import re
 import tempfile
+from collections import namedtuple
 from numbers import Number
-from collections import namedtuple, Iterable
 
-from lupa import LuaRuntime, LuaError
+from chdkptp.lua import LuaContext, PTPError, global_lua
 
-CHDKPTP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            'vendor', 'chdkptp')
+
 DISTANCE_RE = re.compile('(\d+(?:.\d+)?)(mm|cm|m|ft|in)')
 DISTANCE_FACTORS = {
     'mm': 1,
@@ -19,128 +16,10 @@ DISTANCE_FACTORS = {
     'in': 25.4
 }
 
-logger = logging.getLogger('pychdkptp.chdkptp')
-
+Message = namedtuple("Message", ('type', 'script_id', 'value'))
 DeviceInfo = namedtuple("DeviceInfo", ('model_name', 'bus_num', 'device_num',
                                        'vendor_id', 'product_id',
                                        'serial_num', 'chdk_api'))
-Message = namedtuple("Message", ('type', 'script_id', 'value'))
-
-
-class PTPError(Exception):
-    def __init__(self, err_table):
-        Exception.__init__(self, "{0} (ptp_code: {1}".format(err_table.msg,
-                                                             err_table.ptp_rc))
-        self.ptp_code = err_table.ptp_rc
-        self.traceback = err_table.traceback
-
-
-class LuaContext(object):
-    """ Proxy object around :class:`lupa.LuaRuntime` that wraps all Lua code
-        inside of `pcall` and raises proper Exceptions.
-    """
-    def _raise_exception(self, errval):
-        if isinstance(errval, (basestring, numbers.Number)):
-            raise LuaError(errval)
-        elif errval['etype'] == 'ptp':
-            raise PTPError(errval)
-        else:
-            raise LuaError(dict(errval))
-
-    def eval(self, lua_code):
-        return self._rt.eval(lua_code)
-
-    def execute(self, lua_code):
-        return self._rt.execute(lua_code)
-
-    def peval(self, lua_code):
-        returns = 'returns' in lua_code
-        checked_code = ("pcall(function() {0} {1} end)"
-                        .format('return' if not returns else '', lua_code))
-        rval = self._rt.eval(checked_code)
-        if isinstance(rval, Iterable):
-            status, rval = rval
-        else:
-            status = rval
-        if not status:
-            self._raise_exception(rval)
-        return rval
-
-    def pexecute(self, lua_code):
-        checked_code = ("return pcall(function() {0} end)"
-                        .format(lua_code))
-        rval = self._rt.execute(checked_code)
-        if isinstance(rval, Iterable):
-            status, rval = rval
-        else:
-            status = rval
-        if not status:
-            self._raise_exception(rval)
-        return rval
-
-    def require(self, modulename):
-        return self._rt.require(modulename)
-
-    def table(self, *items, **kwargs):
-        return self._rt.table(*items, **kwargs)
-
-    @property
-    def globals(self):
-        return self._rt.globals()
-
-    def __init__(self):
-        self._rt = LuaRuntime(unpack_returned_tuples=True, encoding=None)
-        if self.eval("type(jit) == 'table'"):
-            raise RuntimeError("lupa must be linked against Lua, not LuaJIT.\n"
-                               "Please install lupa with `--no-luajit`.")
-        self._setup_runtime()
-
-    def _setup_runtime(self):
-        # Set up module paths
-        self._rt.execute("""
-            CHDKPTP_PATH = python.eval("CHDKPTP_PATH")
-            package.path = CHDKPTP_PATH .. '/lua/?.lua;' .. package.path
-            package.cpath = CHDKPTP_PATH .. '/?.so;' .. package.path
-        """)
-
-        # Load chdkptp modules
-        self._rt.execute("""
-            require('chdkptp')
-            util = require('util')
-            util:import()
-            varsubst = require('varsubst')
-            chdku = require('chdku')
-            exposure = require('exposure')
-            dng = require('dng')
-            prefs = require('prefs')
-        """.format(CHDKPTP_PATH))
-
-        # Enable debug logging
-        self._rt.execute("""
-            prefs._set('cli_verbose', 2)
-        """)
-
-        # Register loggers
-        self._rt.execute("""
-            cli = {}
-            cli.infomsg = function(...)
-                python.eval('logger.info(\"\"\"' ..
-                            string.format(...):match( "(.-)%s*$" ) ..
-                            '\"\"\")')
-            end
-
-            cli.dbgmsg = function(...)
-                python.eval('logger.debug(\"\"\"' ..
-                            string.format(...):match('(.-)%s*$') ..
-                            '\"\"\")')
-            end
-        """)
-
-        # Create global connection object
-        self._rt.execute("""
-            con = chdku.connection()
-        """)
-global_lua = LuaContext()
 
 
 def list_devices():
@@ -175,23 +54,6 @@ def list_devices():
                                 dev_info['chdk_api'].MINOR)
         infos.append(DeviceInfo(**dev_info))
     return infos
-
-
-def iso_to_av96(iso):
-    return global_lua.globals.exposure.iso_to_av96(iso)
-
-
-def shutter_to_tv96(shutter_speed):
-    return global_lua.globals.exposure.shutter_to_tv96(shutter_speed)
-
-
-def aperture_to_av96(aperture):
-    return global_lua.globals.exposure.f_to_av96(aperture)
-
-
-def apex_to_apex96(apex):
-    x = apex*96
-    return round(x) if x > 0 else -round(x)
 
 
 class ChdkDevice(object):

@@ -24,6 +24,6 @@ setup(
     url="http://github.com/jbaiter/chdkptp-py.git",
     author_email="johannes.baiter@gmail.com",
     license='GPL',
-    py_modules=('chdkptp',),
+    packages=['chdkptp'],
     cmdclass={'install': CustomInstall}
 )
