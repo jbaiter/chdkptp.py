@@ -209,6 +209,7 @@ class ChdkDevice(object):
                                 dev = devspec.device_num})
         con:connect()
         """)
+        self._con = self._lua.globals.con
 
     @property
     def is_connected(self):
@@ -366,9 +367,8 @@ class ChdkDevice(object):
                                 'A/' is optional, it will be automatically
                                 prepended if not specified
         """
-        self._lua.globals.con.mdelete(self._lua.globals.con,
-                                      self._lua.table(*remote_paths),
-                                      self._lua.table(skip_topdirs=True))
+        self._con.mdelete(self._con, self._lua.table(*remote_paths),
+                          self._lua.table(skip_topdirs=True))
 
     def list_files(self, remote_path='A/DCIM'):
         """ Get directory listing for a path on the device.
@@ -554,8 +554,7 @@ class ChdkDevice(object):
             rval = None
             if kwargs.get('download_after', False):
                 tmp_path = tempfile.mkstemp()[1]
-                self._lua.globals.con.download(self._lua.globals.con,
-                                               img_path, tmp_path)
+                self._con.download(self._con, img_path, tmp_path)
                 with open(tmp_path, 'rb') as fp:
                     rval = fp.read()
                 os.unlink(tmp_path)
@@ -606,11 +605,10 @@ class ChdkDevice(object):
             else:
                 rcopts['jpg'] = self._lua.globals.chdku.rc_handler_store(
                     img_data)
-            self._lua.globals.con.capture_get_data_pcall(
-                self._lua.globals.con, self._lua.table(**rcopts))
-            self._lua.globals.con.wait_status_pcall(
-                self._lua.globals.con,
-                self._lua.table(run=False, timeout=30000))
+            self._con.capture_get_data_pcall(
+                self._con, self._lua.table(**rcopts))
+            self._con.wait_status_pcall(
+                self._con, self._lua.table(run=False, timeout=30000))
             # TODO: Check for error
             # TODO: Check for timeout
             self.lua_execute('init_usb_capture(0)')
