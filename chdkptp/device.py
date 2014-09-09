@@ -4,7 +4,7 @@ import tempfile
 from collections import namedtuple
 from numbers import Number
 
-from chdkptp.lua import LuaContext, PTPError, global_lua
+from chdkptp.lua import LuaContext, PTPError, global_lua, parse_table
 
 
 DISTANCE_RE = re.compile('(\d+(?:.\d+)?)(mm|cm|m|ft|in)')
@@ -66,7 +66,7 @@ class ChdkDevice(object):
         self.info = device_info
         self._lua = LuaContext()
         self._lua.globals.devspec = self.info._asdict()
-        self._lua.execute("""
+        self._lua.pexecute("""
         con = chdku.connection({bus = devspec.bus_num,
                                 dev = devspec.device_num})
         con:connect()
@@ -75,7 +75,7 @@ class ChdkDevice(object):
 
     @property
     def is_connected(self):
-        return self._lua.eval("con:is_connected()")
+        return self._lua.call("con:is_connected")
 
     @property
     def mode(self):
@@ -103,23 +103,38 @@ class ChdkDevice(object):
         if not status:
             raise PTPError('Could not switch mode')
 
+    def _parse_message(self, raw_msg):
+        value = raw_msg.value
+        if raw_msg.subtype == 'table':
+            value = parse_table(self._lua.eval(raw_msg.value))
+        return Message(type=raw_msg.type, script_id=raw_msg.script_id,
+                       value=value)
+
     def get_messages(self):
         """ Get all messages from device buffer
 
         :return:    Messages
-        :rtype:     tuple of :class:`Message`
+        :rtype:     generator, yields :class:`Message`
         """
-        # getm
-        raise NotImplementedError
+        while True:
+            raw_msg = self._con.read_msg(self._con)
+            if raw_msg.type == 'none':
+                raise StopIteration()
+            yield self._parse_message(raw_msg)
 
-    def send_message(self, message):
+    def send_message(self, message, script_id=None):
         """ Send a message to the device
 
-        :param message: Message to be sent
-        :type message:  str/unicode
+        :param message:     Message to be sent
+        :type message:      str/unicode
+        :param script_id:   ID of script that the message should be sent to,
+                            defaults to the most recently started script
+        :type script_id:    int/None
         """
-        # putm
-        raise NotImplementedError
+        if script_id:
+            self._lua.call("con:write_msg", message, script_id)
+        else:
+            self._lua.call("con:write_msg", message)
 
     def lua_execute(self, lua_code, wait=True, do_return=True, remote_libs=[]):
         """ Execute Lua code on the device.
@@ -140,26 +155,16 @@ class ChdkDevice(object):
         # string formatting in this case, since this saves us quite a bit of
         # escaping
         lua_rvals, msgs = self._lua.pexecute("""
-        local rvals = {}
-        local msgs = {}
-        con:execwait([[%s]], {rets=rvals, msgs=msgs, libs=%s})
-        return {rvals, msgs}
-        """ % (lua_code, remote_libs)).values()
+            local rvals = {}
+            local msgs = {}
+            con:execwait([[%s]], {rets=rvals, msgs=msgs, libs=%s})
+            return {rvals, msgs}
+            """ % (lua_code, remote_libs)).values()
         if not do_return:
             return None
         return_values = []
         for rv in lua_rvals.values():
-            # scalar
-            if rv.subtype != 'table':
-                return_values.append(rv.value)
-                continue
-            # to dict
-            parsed_val = self._lua.eval(rv.value)
-            parsed_val = dict(parsed_val)
-            # to tuple
-            if all(x.isdigit() for x in parsed_val):
-                parsed_val = tuple(parsed_val.values())
-            return_values.append(parsed_val)
+            return_values.append(self._parse_message(rv).value)
         if len(return_values) == 1:
             return return_values[0]
         else:
