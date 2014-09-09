@@ -17,6 +17,9 @@ Requirements
 
 API Reference
 =============
+.. autoclass:: chdkptp.ChdkDevice
+   :members:
+
 .. automodule:: chdkptp
    :members:
 

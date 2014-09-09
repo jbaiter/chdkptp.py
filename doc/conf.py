@@ -17,13 +17,14 @@ class Mock(object):
         print "Getting mock: ", name
         if name in ('__file__', '__path__'):
             return '/dev/null'
-        # Special case for CFFI
-        elif name == 'FFI':
-            return Mock()
-        elif name[0] == name[0].upper():
-            mockType = type(name, (), {})
-            mockType.__module__ = __name__
-            return mockType
+        elif name == 'eval':
+            def mock_eval(lua_code):
+                lua_code = lua_code.strip()
+                if lua_code.startswith('type'):
+                    return False
+                elif lua_code.startswith('function'):
+                    return lambda *kargs, **kwargs: True
+            return mock_eval
         else:
             return Mock()
 
