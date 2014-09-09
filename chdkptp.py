@@ -2,6 +2,7 @@ import logging
 import numbers
 import os
 import re
+import tempfile
 from numbers import Number
 from collections import namedtuple, Iterable
 
@@ -365,8 +366,9 @@ class ChdkDevice(object):
                                 'A/' is optional, it will be automatically
                                 prepended if not specified
         """
-        # delete, imrm
-        raise NotImplementedError
+        self._lua.globals.con.mdelete(self._lua.globals.con,
+                                      self._lua.table(*remote_paths),
+                                      self._lua.table(skip_topdirs=True))
 
     def list_files(self, remote_path='A/DCIM'):
         """ Get directory listing for a path on the device.
@@ -441,6 +443,14 @@ class ChdkDevice(object):
         if not kwargs.get('wait', True) and action_after:
             raise ValueError("Cannot stream, remove/download after when "
                              "`wait` is `False`")
+        dng_download = (not kwargs.get('stream', True)
+                        and kwargs.get('dng', False)
+                        and (kwargs.get('download_after', False)
+                             or kwargs.get('remove_after', False)))
+        if dng_download:
+            raise NotImplementedError(
+                "Non-streaming capture with subsequent download/removal is "
+                "only supported for JPEG at the moment.")
 
     def _parse_shoot_args(self, **kwargs):
         options = {}
@@ -474,6 +484,8 @@ class ChdkDevice(object):
                 options['fformat'] = 4
             else:
                 options['fformat'] = 1
+        else:
+            options['info'] = True
         return options
 
     def shoot(self, **kwargs):
@@ -529,7 +541,7 @@ class ChdkDevice(object):
                              remote_libs=['rlib_shoot'])
             return
         if not kwargs.get('stream', True):
-            status, errors = self.lua_execute(
+            status = self.lua_execute(
                 "return rlib_shoot(%s)" % options,
                 remote_libs=['serialize_msgs', 'rlib_shoot'])
             # TODO: Check for errors
@@ -537,11 +549,16 @@ class ChdkDevice(object):
                     kwargs.get('remove_after', False)):
                 return
 
-            # TODO: Construct path on device for captured image
-            img_path = ''
+            img_path = "{0}/IMG_{1:04}.JPG".format(status['dir'],
+                                                   status['exp'])
             rval = None
             if kwargs.get('download_after', False):
-                rval = self.download_file(img_path)
+                tmp_path = tempfile.mkstemp()[1]
+                self._lua.globals.con.download(self._lua.globals.con,
+                                               img_path, tmp_path)
+                with open(tmp_path, 'rb') as fp:
+                    rval = fp.read()
+                os.unlink(tmp_path)
             if kwargs.get('remove_after', False):
                 self.delete_files((img_path,))
             return rval
