@@ -314,7 +314,7 @@ class ChdkDevice(object):
                                 (default: False)
         :type dng:              boolean
         :param wait:            Wait for capture to complete (default: True)
-        :type wait;             boolean
+        :type wait:             boolean
         :param download_after:  Download and return image data after capture
                                 (default: False)
         :type download_after:   boolean
