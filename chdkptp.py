@@ -123,15 +123,15 @@ class LuaContext(object):
         self._rt.execute("""
             cli = {}
             cli.infomsg = function(...)
-                python.eval(
-                    'logger.info(\"\"\"' .. string.format(...) .. '\"\"\")'
-                )
+                python.eval('logger.info(\"\"\"' ..
+                            string.format(...):match( "(.-)%s*$" ) ..
+                            '\"\"\")')
             end
 
             cli.dbgmsg = function(...)
-                python.eval(
-                    'logger.debug(\"\"\"' .. string.format(...) .. '\"\"\")'
-                )
+                python.eval('logger.debug(\"\"\"' ..
+                            string.format(...):match('(.-)%s*$') ..
+                            '\"\"\")')
             end
         """)
 
