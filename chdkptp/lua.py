@@ -105,6 +105,7 @@ class LuaContext(object):
             exposure = require('exposure')
             dng = require('dng')
             prefs = require('prefs')
+            fsutil = require('fsutil')
         """.format(CHDKPTP_PATH))
 
         # Enable debug logging

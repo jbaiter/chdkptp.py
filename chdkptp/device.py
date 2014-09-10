@@ -1,10 +1,12 @@
 import os
 import re
+import StringIO
 import tempfile
 from collections import namedtuple
 from numbers import Number
 
 from chdkptp.lua import LuaContext, PTPError, global_lua, parse_table
+import chdkptp.util as util
 
 
 DISTANCE_RE = re.compile('(\d+(?:.\d+)?)(mm|cm|m|ft|in)')
@@ -146,6 +148,8 @@ class ChdkDevice(object):
         :do_return:         Return value of lua code, only if `wait=True`
         :rtype:             bool/int/unicode/dict/tuple
         """
+        # TODO: This should all really work with LuaContext.call, but for some
+        # reason it fucks up the return values .-/
         remote_libs = "{%s}" % ", ".join("'%s'" % lib for lib in remote_libs)
         if not wait:
             self._lua.pexecute("con:exec([[%s]], {libs=%s})"
@@ -176,13 +180,14 @@ class ChdkDevice(object):
         :param flush:   Discard script messages
         :type flush:    bool
         """
-        # killscript
-        raise NotImplementedError
+        self._lua.call("con:exec", "", flush_cam_msgs=flush,
+                       flush_host_msgs=flush, clobber=True)
+        self._lua.call("con:wait_status", run=False)
 
-    def upload_files(self, local_paths, remote_path='A/', skip_checks=False):
-        """ Upload one or more files/directories to the device.
+    def upload_file(self, local_path, remote_path='A/', skip_checks=False):
+        """ Upload a file to the device.
 
-        :param local_paths:     One or more locals paths
+        :param local_paths:     Path to a local file
         :type local_paths:      str/unicode
         :param remote_path:     Target path on the device
         :type remote_path:      str/unicode
@@ -190,8 +195,37 @@ class ChdkDevice(object):
                                 a script is running on the device while
                                 uploading.
         """
-        # upload, mupload
-        raise NotImplementedError
+        # TODO: Test!
+        local_path = os.path.abspath(local_path)
+        remote_path = util.to_camerapath(remote_path)
+        if os.path.isdir(local_path):
+            raise ValueError("`local_path` must be a file, not a directory.")
+        if not skip_checks:
+            status, error = self._lua.call("con:stat", remote_path)
+            if not status:
+                raise Exception("Stat on remote path '{0}' failed: {1}"
+                                .format(remote_path, error))
+            if remote_path.endswith("/"):
+                if not status.is_dir:
+                    raise ValueError("Remote path '{0}' is not a directory. "
+                                     "Please leave out the trailing slash if "
+                                     "you are refering to a file")
+                remote_path = os.path.join(remote_path,
+                                           os.path.basename(local_path))
+        self._lua.call("con:upload", local_path, remote_path)
+
+    def batch_upload(self, local_paths, remote_path='A/'):
+        """ Upload multiple files/directories to the device.
+
+        :param local_paths:     Multiple locals paths
+        :type local_paths:      collection of str/unicode
+        :param remote_path:     Target path on the device
+        :type remote_path:      str/unicode
+        """
+        remote_path = util.to_camerapath(remote_path)
+        local_paths = [os.path.abspath(p) for p in local_paths]
+        self._lua.call("con:mupload", self._lua.table(*local_paths),
+                       remote_path, dirs=True, mtime=True, maxdepth=100)
 
     def download_file(self, remote_path, local_path=None):
         """ Download a single file from the device.
@@ -209,23 +243,33 @@ class ChdkDevice(object):
                             as a bytestring, otherwise None
         :rtype:             str/None
         """
-        raise NotImplementedError
+        remote_path = util.to_camerapath(remote_path)
+        if not local_path:
+            local_path = tempfile.mkstemp()[1]
+        self._lua.call("con:download", remote_path, local_path)
+        if not local_path:
+            with open(local_path, 'rb') as fp:
+                rval = fp.read()
+            os.unlink(local_path)
+            return rval
 
-    def download_files(self, remote_paths, local_path='./', skip_checks=False):
-        """ Download one or more files/directories from the device.
+    def batch_download(self, remote_paths, local_path='./', overwrite=False):
+        """ Download multiple files/directories from the device.
 
-        :param remote_paths:    One or more paths on the device. The leading
+        :param remote_paths:    Multiple paths on the device. The leading
                                 'A/' is optional, it will be automatically
                                 prepended if not specified
-        :type remote_paths:     str/unicode
+        :type remote_paths:     collection of str/unicode
         :param local_path:      Target path on the local file system
         :type local_path:       str/unicode
-        :param skip_checks:     Skip sanity checks on the device, required if
-                                a script is running on the device while
-                                downloading.
+        :param overwrite:       Overwrite existing files
+        :type overwrite:        bool
         """
-        # download, mdownload, imdl
-        raise NotImplementedError
+        remote_paths = [util.to_camerapath(p) for p in remote_paths]
+        local_path = os.path.abspath(local_path)
+        self._lua.call("con:mdownload", self._lua.table(*remote_paths),
+                       local_path, maxdepth=100, batchsize=20, dbgmem=False,
+                       overwrite=overwrite)
 
     def delete_files(self, remote_paths):
         """ Delete one or more files/directories from the device.
@@ -237,16 +281,19 @@ class ChdkDevice(object):
         self._con.mdelete(self._con, self._lua.table(*remote_paths),
                           self._lua.table(skip_topdirs=True))
 
-    def list_files(self, remote_path='A/DCIM'):
+    def list_files(self, remote_path='A/DCIM', detailed=False):
         """ Get directory listing for a path on the device.
 
         :param remote_path: Path on the device
         :type remote_path:  str/unicode
+        :param detailed:    Return detailed information about each file/dir
+        :type detailed:     bool
         :return:            All files and directories in the path
-        :rtype:             tuple of str/unicode
         """
-        # ls, imls
-        raise NotImplementedError
+        remote_path = util.to_camerapath(remote_path)
+        flist = self._lua.call("con:listdir", remote_path, dirsonly=False,
+                               stat="*" if detailed else "/")
+        return flist
 
     def mkdir(self, remote_path):
         """ Create a directory on the device.
@@ -255,34 +302,81 @@ class ChdkDevice(object):
         :param remote_path: Path on the device
         :type remote_path:  str/unicode
         """
-        # mkdir
-        raise NotImplementedError
+        remote_path = util.to_camerapath(remote_path)
+        self._lua.call("con:mkdir_m", remote_path)
 
-    def reconnect(self):
-        """ Reset the connection to the device. """
-        # reconnect
-        raise NotImplementedError
+    def reconnect(self, wait=2000):
+        """ Reset the connection to the device.
 
-    def reboot(self):
-        """ Reboot the device. """
-        # reboot
-        raise NotImplementedError
+        :param wait:        Time in miliseconds to wait before attempting
+                            to reconnect
+        :type wait:         int
+        """
+        self._lua.call("con:reconnect", wait=wait, strict=True)
 
-    def get_frames(self, num=1, interval=0, format=None):
-        """ Grab one or more frames from the device's preview viewport.
+    def reboot(self, wait=3500, bootfile=None):
+        """ Reboot the device.
 
-        :param num:         Number of frames to grab
-        :type num:          int
-        :param interval:    Interval between frames (in miliseconds)
-        :type interval:     int
+        :param wait:        Time in miliseconds to wait before attempting
+                            to reconnect
+        :type wait:         int
+        :param bootfile:    Optional file to boot. Must be the path to an
+                            existing file on the device that is either an
+                            unencoded binary or (for DryOS) an encoded .FI2
+        :type bootfile:     str/unicode
+        """
+        if bootfile:
+            bootfile = util.to_camerapath(bootfile)
+        self.lua_execute("sleep(1000); reboot('{0}')".format(bootfile),
+                         clobber=True)
+        self.reconnect(wait)
+
+    def get_frames(self, format='ppm', scaled=None):
+        """ Get a generator that yields frames from the device's viewport.
+
         :param format:      Target format for frames, if `None` the raw image
                             data is returned
-        :type format:       One of None, 'jpg', 'png', 'pbm'
-        :return:            Grabbed frames
-        :rtype:             list of byte strings
+        :type format:       One of 'ppm', 'jpg', 'png'
+        :param scaled:      The raw image has the wrong aspect ratio, with
+                            this flag this can be corrected on the device,
+                            which results in some quality degradation, but
+                            is very fast.
+                            Defaults to `True` when format is 'ppm', otherwise
+                            `False`.
+        :type scaled:       bool
+        :return:            Generator that yields bytestrings with frame data
+                            in the specified format
         """
-        # lvdump, lvdumpimg
-        raise NotImplementedError
+        if format not in ('ppm', 'jpg', 'png'):
+            raise ValueError("`format` has to be one of 'ppm', 'jpg' or 'png'")
+        if scaled is None:
+            scaled = (format == 'ppm')
+        while True:
+            imgdata = self._lua.eval("""
+                function(skip)
+                    local frame = con:get_live_data(nil, 1)
+                    local pimg = liveimg.get_viewport_pimg(nil, frame, skip)
+                    local lb = pimg:to_lbuf_packed_rgb(nil)
+                    local header = string.format('P6\\n%d\\n%d\\n%d\\n',
+                                                pimg:width(), pimg:height(),
+                                                255)
+                    return header .. lb:string()
+                end
+            """)(scaled)
+            if format == 'ppm':
+                yield imgdata
+            else:
+                try:
+                    from PIL import Image
+                except ImportError:
+                    raise RuntimeError(
+                        "To convert into JPEG or PNG, please install the "
+                        "`pillow` package.")
+                img = Image.open(StringIO.StringIO(imgdata))
+                width, height = img.size
+                img.resize((width/2, height))
+                imgdata = img.tobytes('PNG' if format == 'png' else 'JPEG')
+                yield imgdata
 
     def shoot(self, **kwargs):
         """ Shoot a picture
@@ -351,11 +445,7 @@ class ChdkDevice(object):
         img_path = "{0}/IMG_{1:04}.JPG".format(status['dir'], status['exp'])
         rval = None
         if download:
-            tmp_path = tempfile.mkstemp()[1]
-            self._con.download(self._con, img_path, tmp_path)
-            with open(tmp_path, 'rb') as fp:
-                rval = fp.read()
-            os.unlink(tmp_path)
+            rval = self.download_file(img_path)
         if remove:
             self.delete_files((img_path,))
         return rval

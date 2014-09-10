@@ -1,3 +1,5 @@
+import os
+
 from chdkptp.lua import global_lua
 
 
@@ -16,3 +18,9 @@ def aperture_to_av96(aperture):
 def apex_to_apex96(apex):
     x = apex*96
     return round(x) if x > 0 else -round(x)
+
+
+def to_camerapath(path):
+    if not path.lower().startswith("a/"):
+        path = os.path.join("A", path)
+    return path
