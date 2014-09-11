@@ -1,2 +1,2 @@
 include chdkptp_module.diff
-graft vendor
+graft chdkptp/vendor

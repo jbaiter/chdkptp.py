@@ -6,7 +6,7 @@ from collections import Iterable
 import lupa
 
 CHDKPTP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            '..', 'vendor', 'chdkptp')
+                            'vendor', 'chdkptp')
 logger = logging.getLogger('chdkptp.lua')
 
 
