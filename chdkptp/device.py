@@ -155,6 +155,14 @@ class ChdkDevice(object):
             self._lua.pexecute("con:exec([[%s]], {libs=%s})"
                                % (lua_code, remote_libs))
             return None
+        if do_return and "return" not in lua_code:
+            if ";" not in lua_code[:-1] and "\n" not in lua_code:
+                lua_code = "return " + lua_code
+            else:
+                raise ValueError(
+                    "`do_return` was specified, but no return statement was"
+                    " specified in the supplied `lua_code`. Please change your"
+                    " script so that it returns the value you want.")
         # NOTE: Because of the frequency of curly braces, we prefer old-style
         # string formatting in this case, since this saves us quite a bit of
         # escaping
