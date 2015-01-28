@@ -252,13 +252,12 @@ class ChdkDevice(object):
         :rtype:             str/None
         """
         remote_path = util.to_camerapath(remote_path)
+        path = local_path or tempfile.mkstemp()[1]
+        self._lua.call("con:download", remote_path, path)
         if not local_path:
-            local_path = tempfile.mkstemp()[1]
-        self._lua.call("con:download", remote_path, local_path)
-        if not local_path:
-            with open(local_path, 'rb') as fp:
+            with open(path, 'rb') as fp:
                 rval = fp.read()
-            os.unlink(local_path)
+            os.unlink(path)
             return rval
 
     def batch_download(self, remote_paths, local_path='./', overwrite=False):
