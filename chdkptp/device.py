@@ -300,7 +300,13 @@ class ChdkDevice(object):
         remote_path = util.to_camerapath(remote_path)
         flist = self._lua.call("con:listdir", remote_path, dirsonly=False,
                                stat="*" if detailed else "/")
-        return flist
+        if not detailed:
+            return [os.path.join(remote_path, p) for p in flist.values()]
+        else:
+            return [tuple(os.path.join(remote_path,
+                                       dict(info.items())['name']),
+                          {k: v for k, v in info.items() if k != 'name'})
+                    for info in flist.values()]
 
     def mkdir(self, remote_path):
         """ Create a directory on the device.
