@@ -32,6 +32,14 @@ API Reference
 .. automodule:: chdkptp.util
    :members:
 
+Changelog
+=========
+0.1.1 (2015/01/28)
+    - Improved user-friendliness of `lua_execute`
+    - Fix bug in `download_file` where the content would not be returned if
+      no local file was supplied as an argument
+    - Return Python list in `list_files` instead of a Lua table
+
 
 
 Indices and tables

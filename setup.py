@@ -20,7 +20,7 @@ class CustomInstall(InstallCommand):
 
 setup(
     name='chdkptp.py',
-    version="0.1",
+    version="0.1.1",
     description=("Python bindings for chdkptp"),
     author="Johannes Baiter",
     url="http://github.com/jbaiter/chdkptp-py.git",
