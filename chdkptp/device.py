@@ -81,10 +81,13 @@ class ChdkDevice(object):
 
     @property
     def mode(self):
+        """ The current mode of the device, one of `record` or `play`. """
         is_record, is_video, _ = self.lua_execute('return get_mode()')
         return 'record' if is_record else 'play'
 
     def switch_mode(self, mode):
+        """ Change the mode of the device, must be one of `record` or `play`.
+        """
         if mode not in ('play', 'record'):
             raise ValueError("`mode` must be one of 'play' or 'record'")
         if self.mode == mode:
@@ -145,7 +148,14 @@ class ChdkDevice(object):
         :type lua_code:     str/unicode
         :param wait:        Block until code has finished executing
         :type wait:         bool
-        :do_return:         Return value of lua code, only if `wait=True`
+        :param do_return:   Return value of lua code, only if `wait=True`
+        :type do_return:    bool
+        :param remote_libs: Additional code modules from `rlibs.lua` (see
+                            chdkptp source) that should be uploaded along with
+                            the specified code
+        :type remote_libs:  List of str/unicode with names of modules from
+                            `rlibs.lua`
+
         :rtype:             bool/int/unicode/dict/tuple
         """
         # TODO: This should all really work with LuaContext.call, but for some
