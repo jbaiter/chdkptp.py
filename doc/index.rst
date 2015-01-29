@@ -43,6 +43,9 @@ API Reference
 
 Changelog
 =========
+0.1.2 (2015/01/29)
+    - Minor documentation updates
+
 0.1.1 (2015/01/28)
     - Improved user-friendliness of `lua_execute`
     - Fix bug in `download_file` where the content would not be returned if
