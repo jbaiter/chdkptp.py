@@ -43,6 +43,12 @@ API Reference
 
 Changelog
 =========
+0.1.3 (2015/04/25)
+    - Bugfix in error handling code
+    - Bugfix: Uploading files under a different name works now
+    - API Change: `ChdkDevice.delete_files` now takes a variable number of
+      arguments
+
 0.1.2 (2015/01/29)
     - Minor documentation updates
 
