@@ -8,6 +8,8 @@ from numbers import Number
 from chdkptp.lua import LuaContext, PTPError, global_lua, parse_table
 import chdkptp.util as util
 
+from lupa import LuaError
+
 
 DISTANCE_RE = re.compile('(\d+(?:.\d+)?)(mm|cm|m|ft|in)')
 DISTANCE_FACTORS = {
@@ -219,12 +221,13 @@ class ChdkDevice(object):
         if os.path.isdir(local_path):
             raise ValueError("`local_path` must be a file, not a directory.")
         if not skip_checks:
-            status, error = self._lua.call("con:stat", remote_path)
-            if not status:
-                raise Exception("Stat on remote path '{0}' failed: {1}"
-                                .format(remote_path, error))
             if remote_path.endswith("/"):
-                if not status.is_dir:
+                try:
+                    status = parse_table(
+                        self._lua.call("con:stat", remote_path))
+                except LuaError:
+                    status = {'is_dir': False}
+                if not status['is_dir']:
                     raise ValueError("Remote path '{0}' is not a directory. "
                                      "Please leave out the trailing slash if "
                                      "you are refering to a file")

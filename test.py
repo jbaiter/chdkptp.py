@@ -42,3 +42,13 @@ for i in xrange(5):
     imgdata = dev.shoot(stream=False, download_after=True, remove_after=True)
     with open(fpath, 'wb') as fp:
         fp.write(imgdata)
+
+print "Checking file upload"
+with open('/tmp/test.txt', 'w') as fp:
+    fp.write('test')
+dev.upload_file('/tmp/test.txt', 'A/')
+assert 'a/test.txt' in [x.lower() for x in dev.list_files()]
+
+print "Checking file removal"
+dev.delete_files('A/test.txt')
+assert 'a/test.txt' not in [x.lower() for x in dev.list_files()]
