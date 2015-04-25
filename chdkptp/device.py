@@ -291,7 +291,7 @@ class ChdkDevice(object):
                        local_path, maxdepth=100, batchsize=20, dbgmem=False,
                        overwrite=overwrite)
 
-    def delete_files(self, remote_paths):
+    def delete_files(self, *remote_paths):
         """ Delete one or more files/directories from the device.
 
         :param remote_paths:    One or more paths on the device. The leading
@@ -473,7 +473,7 @@ class ChdkDevice(object):
         if download:
             rval = self.download_file(img_path)
         if remove:
-            self.delete_files((img_path,))
+            self.delete_files(img_path)
         return rval
 
     def _shoot_streaming(self, options, dng=False):
