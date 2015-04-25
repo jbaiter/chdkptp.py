@@ -1,7 +1,6 @@
 import logging
 import numbers
 import os
-from collections import Iterable
 
 import lupa
 
@@ -31,12 +30,12 @@ class LuaContext(object):
             raise lupa.LuaError(parse_table(errval))
 
     def _parse_rval(self, rval):
-        if isinstance(rval, Iterable):
-            status, rval = rval
-        else:
-            status = rval
-        if not status:
-            self._raise_exception(rval)
+        # Check for errors from checked calls and for internal CHDK errors
+        if isinstance(rval, tuple):
+            if not rval[0] or len(rval) == 4 and rval[1] is None:
+                self._raise_exception(rval[2])
+            else:
+                rval = rval[1]
         return rval
 
     def call(self, funcname, *args, **kwargs):
