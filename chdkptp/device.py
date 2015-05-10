@@ -497,15 +497,11 @@ class ChdkDevice(object):
             rcopts['raw'] = self._lua.eval("""
                 function(dng_info, img_data)
                     return function(lcon, hdata)
-                        cli.dbgmsg('rc chunk get %d\\n', hdata.id)
                         local status, raw = lcon:capture_get_chunk_pcall(
                             hdata.id)
                         if not status then
                             return false, raw
                         end
-                        cli.dbgmsg('rc chunk size:%d offset:%s last:%s\\n',
-                                    raw.size, tostring(raw.offset),
-                                    tostring(raw.last))
                         table.insert(img_data, {data=dng_info.hdr})
                         local status, err = chdku.rc_process_dng(dng_info,
                                                                 raw)
@@ -532,6 +528,11 @@ class ChdkDevice(object):
         # the output data
         return self._lua.eval("""
             function(chunks)
+                function compare(a, b)
+                    return a.offset < b.offset
+                end
+                table.sort(chunks, compare)
+
                 local out_data = ''
                 for i, c in ipairs(chunks) do
                     out_data = out_data .. c.data:string()
@@ -539,7 +540,6 @@ class ChdkDevice(object):
                 return out_data
             end
             """)(img_data)
-        return img_data
 
     def _validate_shoot_args(self, **kwargs):
         for arg in ('shutter_speed', 'real_iso', 'market_iso', 'aperture',
