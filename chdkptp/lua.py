@@ -11,10 +11,13 @@ logger = logging.getLogger('chdkptp.lua')
 
 class PTPError(Exception):
     def __init__(self, err_table):
-        Exception.__init__(self, ("{0} (ptp_code: {1})"
-                                  .format(err_table.msg, err_table.ptp_rc)))
-        self.ptp_code = err_table.ptp_rc
-        self.traceback = err_table.traceback
+        msg = err_table.get('message')
+        errcode = err.table.get('ptp_rc')
+        super(PTPError, self).__init__(
+            "{0} (ptp_code: {1})".format(msg or "Unknown error",
+                                         errcode or 'unknown'))
+        self.ptp_code = errcode
+        self.traceback = err_table.get('traceback')
 
 
 class LuaContext(object):
