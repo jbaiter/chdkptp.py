@@ -528,16 +528,20 @@ class ChdkDevice(object):
         # the output data
         return self._lua.eval("""
             function(chunks)
-                function compare(a, b)
-                    return a.offset < b.offset
-                end
-                table.sort(chunks, compare)
-
-                local out_data = ''
+                local size = 0
                 for i, c in ipairs(chunks) do
-                    out_data = out_data .. c.data:string()
+                    size = size + c.size
                 end
-                return out_data
+                local buf = lbuf.new(size)
+                local offset = 0
+                for i, c in ipairs(chunks) do
+                    if c.offset ~= nil then
+                        offset = c.offset
+                    end
+                    buf:fill(c.data, offset, 1)
+                    offset = offset + c.size
+                end
+                return buf:string()
             end
             """)(img_data)
 
@@ -555,9 +559,9 @@ class ChdkDevice(object):
             raise ValueError("`nd_filter` must be one of True (swung in), "
                              "False (swung out) or None (camera default)")
         bad_distance = (
-            'distance' in kwargs
-            and not (isinstance(kwargs.get('distance', None), Number)
-                     or DISTANCE_RE.match(kwargs.get('distance', None))))
+            'distance' in kwargs and
+            not (isinstance(kwargs.get('distance', None), Number) or
+                 DISTANCE_RE.match(kwargs.get('distance', None))))
         if bad_distance:
             raise ValueError("`distance` must be an integer (= value in "
                              "milimeter) or a string with a suffix that is "
@@ -567,10 +571,10 @@ class ChdkDevice(object):
         if not kwargs.get('wait', True) and action_after:
             raise ValueError("Cannot stream, remove/download after when "
                              "`wait` is `False`")
-        dng_download = (not kwargs.get('stream', True)
-                        and kwargs.get('dng', False)
-                        and (kwargs.get('download_after', False)
-                             or kwargs.get('remove_after', False)))
+        dng_download = (not kwargs.get('stream', True) and
+                        kwargs.get('dng', False) and
+                        (kwargs.get('download_after', False) or
+                         kwargs.get('remove_after', False)))
         if dng_download:
             raise NotImplementedError(
                 "Non-streaming capture with subsequent download/removal is "
