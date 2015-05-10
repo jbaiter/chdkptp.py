@@ -108,7 +108,7 @@ class ChdkDevice(object):
             return true, ""
             """ % (mode_num, mode_num, mode_num))
         if not status:
-            raise PTPError('Could not switch mode')
+            raise RuntimeError('Could not switch mode')
 
     def _parse_message(self, raw_msg):
         value = raw_msg.value
