@@ -5,7 +5,7 @@ import tempfile
 from collections import namedtuple
 from numbers import Number
 
-from chdkptp.lua import LuaContext, PTPError, global_lua, parse_table
+from chdkptp.lua import LuaContext, global_lua, parse_table
 import chdkptp.util as util
 
 from lupa import LuaError
