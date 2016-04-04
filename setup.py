@@ -23,7 +23,7 @@ setup(
     version="0.1.3",
     description=("Python bindings for chdkptp"),
     author="Johannes Baiter",
-    url="http://github.com/jbaiter/chdkptp-py.git",
+    url="http://github.com/jbaiter/chdkptp.py.git",
     author_email="johannes.baiter@gmail.com",
     license='GPL',
     packages=['chdkptp'],
