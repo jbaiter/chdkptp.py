@@ -3,8 +3,8 @@ import os
 from chdkptp.lua import global_lua
 
 
-def iso_to_av96(iso):
-    return global_lua.globals.exposure.iso_to_av96(iso)
+def iso_to_sv96(iso):
+    return global_lua.globals.exposure.iso_to_sv96(iso)
 
 
 def shutter_to_tv96(shutter_speed):
