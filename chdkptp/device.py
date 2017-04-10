@@ -84,7 +84,7 @@ class ChdkDevice(object):
     @property
     def mode(self):
         """ The current mode of the device, one of `record` or `play`. """
-        is_record, is_video, _ = self.lua_execute('return get_mode()')
+        is_record, is_video, _ = self.lua_execute('sleep(50); return get_mode()')
         return 'record' if is_record else 'play'
 
     def switch_mode(self, mode):
@@ -96,6 +96,7 @@ class ChdkDevice(object):
             return
         mode_num = int(mode == 'record')
         status, error = self.lua_execute("""
+            sleep(50)
             switch_mode_usb(%d)
             local i = 0
             while (get_mode() and 1 or 0) ~= %d and i < 300 do
